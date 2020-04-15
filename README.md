@@ -91,7 +91,8 @@ represents the flow domain).
 # First, install some utilities we need
 (rem) > apt install netpbm potrace -y
 # Then trace the image with potrace
-(rem) > curl --upload-file ./porous-media.png https://transfer.sh/porous-media.png
+(rem) > pngtopnm porous-media.png > porous-media.pnm
+(rem) > potrace -s porous-media.pnm
 ```
 
 These operations will result in something similar to (the black region
@@ -109,10 +110,244 @@ should represent the flow domain):
 
 ![3D STL file for the porous medium](images/porous-media-stl.png)
 
+#### Surface Quality
+
+Run the `surfaceCheck porous-media.stl` (surfaceCheck is an OpenFOAM utility) and answer the
+following questions (based on its output):
+
+5. What's the bounding box of the surface?
+6. What's the percentage of the triangles which have a quality of more than 0.75?
+7. Are there perfect triangles in your STL file? (Hint: max triangle quality)
+8. How many unconnected parts are there?
+
+Note that an example case generated a very low-quality surface for me:
+
+```bash
+Triangle quality (equilateral=1, collapsed=0):
+    # Quality range:  percentage of triangles
+	0 .. 0.05  : 0.29404
+	0.05 .. 0.1  : 0.0917934
+	0.1 .. 0.15  : 0.0886098
+	0.15 .. 0.2  : 0.10612
+	0.2 .. 0.25  : 0.107358
+	0.25 .. 0.3  : 0.08578
+	0.3 .. 0.35  : 0.0678281
+	0.35 .. 0.4  : 0.0535904
+	0.4 .. 0.45  : 0.0363459
+	0.45 .. 0.5  : 0.0254687
+	0.5 .. 0.55  : 0.0168023
+	0.55 .. 0.6  : 0.0103467
+	0.6 .. 0.65  : 0.00504068
+	0.65 .. 0.7  : 0.00468695 
+	0.7 .. 0.75  : 0.00353732
+	0.75 .. 0.8  : 0.0010612
+	0.8 .. 0.85 : 0.000707464
+	0.85 ..  0.9  : 0.000265299
+	0.9 ..  0.95 : 0.000265299
+	0.95 ..  1 : 0.000353732
+
+min 1e-15 for triangle 4 
+max 0.999555 for triangle 3056
+```
+
+A first look on these metrics suggests that the surface file is of
+**poor quality**, but this may not always be the case:
+
+9. `surfaceCheck` automatically writes problem faces to a file `badFaces`;
+   you can view them if you use `surfaceSubset` (another OpenFOAM utility):
+   - Copy the default dictionary file for the utility:
+   ```bash
+   (rem) > cp $FOAM_APP/utilities/surface/surfaceSubset/surfaceSubsetDict .
+   ```
+   - Inside that dictionary, you should set the `faces` keyword to read the bad
+   faces from the file:
+   ```cpp
+   faces   #include "badFaces";
+   ```
+   - You can also comment out the whole `surfaces` sub-dictionary in there.
+   - Then run the command:
+   ```bash
+   (rem) > surfaceSubset surfaceSubsetDict porous-media.stl badFaces.stl
+   ```
+   - You can view `badFaces.stl` using ParaView.
+
+Depending on the `cfMesh` workflow you intend to use 
+(`cartesian2DMesh`, `cartesianMesh`, `tetMesh`, `pMesh` ); 
+these faces may not be that important. For example, for `cartesian2DMesh`
+meshes, faces whose normals are in the z-direction are ignored. In fact,
+we have to remove them for the utility to work.
+
+
 #### `cartesian2DMesh` workflow
+
+The surface file now is ready for most cfMesh workflow, but the `cartesian2DMesh`
+workflow requires the absence of any faces whose normals are going in the
+z-direction.
+
+Because we've **extruded** the SVG file in the z-direction, we don't have to
+worry about face normals having (non-null) all 3 components. We know that, for
+every surface face, at least one normal component is null.
+
+We'll attempt to remove these xy-plane faces next. Here are some methods one can
+use (Pick the one you're most comfortable with):
+
+**Method 01:**
+
+STL gemetries are stored as plain-text files, describing triangles in a trivial manner (mentioning
+the face normal):
+```
+facet normal 0 0 -1
+   outer loop
+     vertex 0 43.801 -2.5
+     vertex 0.282 51.506 -2.5
+     vertex 0.586 51.524 -2.5
+   endloop
+endfacet
+```
+So, a simple text-editor command (or just use: `sed`) could look for the normals 
+we want to delete, and delete the whole facet block (which always spans over 7 lines).
+
+For example, using `sed`, you can
+```bash
+(rem) > sed -e '/facet normal 0 0/,+6d' porous-media.stl > porous-media-2d.stl
+```
+
+**Method 02:**
+
+The previous method makes the somewhat-"dangerous" assumption that the pattern
+`facet normal 0 0.*` exactly matches every triangle normal we want to delete.
+
+A more accurate method would be chainning a series of ParaView filters to get the
+same effect of the previous `sed` command:
+
+- Start by loading `porous-media.stl`, and calculating normals with the help of
+  `GenerateSurfaceNormals` filter with the following settings:
+  - Feature angle: 0 (but not that important)
+  - `Compute Cell Normals` box checked
+  - Everything else: Use default values
+
+- On top of the `GenerateSurfaceNormals` filter, apply a `Calculator` filter
+  with the following settings (No actual calculations, just making a copy
+  of normal z-component and naming it "Z"):
+  - Attribute Mode: Point Data
+  - Result Array Name: Z
+  - From scalas menu, choose `Normals_Z` 
+
+- Now that we have the scalar field Z ready, apply a `Threshold` filter to the
+  `Calculator` one, with the following settings (To select only faces that have
+  normals with a null z-component):
+  - Scalars: Z
+  - Minimum: 0
+  - Maximum: 0
+
+- Finally, apply an `ExtractSurface` filter, and with the final object selected,
+  Go to `File > Save Data` to save the surface as an STL file 
+  (name it `porous-media-2d.stl`).
+
+
+Now run `surfaceCheck` on the new STL file:
+
+10. How the general triangles quality trend compare to the original 3D STL
+	geometry?
+11. Are there any outstanding-quality triangles?
+12. What you should pay attention to now is the minimal and maximal edge
+    length in the surface file because we want to choose a cellSize that
+	captures most the details in the surface. what are these values?
+	Hint: Examine the output of `surfaceCheck`.
+
+Taking into consideration that, for a sample run, the bounding box was
+`(0 0 -2.5) (141.139 141.111 2.5)`, min edge length: 0.15 and max edge
+length: 60; The meshing process was successful with the following meshDict:
+
+```cpp
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      meshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+surfaceFile   "porous-media-2d.stl";
+minCellSize   0.5;
+maxCellSize   10;
+```
+
+> Of course, you can use our intoductory case as a dummy base for your meshing
+> experiments:
+> ```bash
+> (rem) > git clone https://github.com/FOAM-School/res-eng-openfoam-intro porousMesh
+> (rem) > rm -r porousMesh/0 porousMesh/0.orig
+> (rem) > cp porous-media-2d.stl porousMesh/
+> ```
+
+Whe choosing minimal cell size in such situations, it's probably best to start
+with a relatively large one (2.0 for example) and decrease it as you check the
+quality of generated meshes (with `checkMesh -constant` if you have deleted 
+time directories) until all mesh tests pass.
+
+These `cellSize` configurations resulted in the following stats:
+- Cells count around 50,500, 88% of which are hexes, the remaining ones are
+  polyhedrons
+- Max non-orthogonality: 33 degrees
+- Max skewness around 3.0
+
+Of course, `cfMesh` meshed the largest region of the domain as it had some 
+unconnected regions (isolated pores).
+
+13. You can estimate the effective porosity (virtually):
+- First, calculate the bounding box volume ( Vb )
+- Then calculate Vm/Vb where Vm is the mesh volume reported by `checkMesh`
+- Compare the result to the 0.4 we specified for the PNG image earlier.
+
+![Porous medium Mesh in OpenFOAM](images/porous-mesh.png)
 
 ## Intermediate skills
 
 ### Advanced usage of `cfMesh`
+
+Wait! what about boundary patches??
+
+Currently, all boundary faces are assembled into a single patch, which is
+not so useful. If the STL file had some solid names in it they would have
+been retained as boundary patches; but that's "rare" in such situations.
+Sure enough, OpenFOAM has some nice utilities that can help.
+
+1. The first step is to run `autoPatch`. This utility tries to figure out
+   the distinct patches following a provided feature angle:
+
+```bash
+(rem) > autoPatch 75 -overwrite
+```
+The utility will then generate many patches (around 36) where:
+- The first patch (`auto0`) is the outer boundary of the domain in the x-y
+  plane.
+- The last two patches (`auto34` and `auto35`) are the "FrontAndBack" patches
+  (patches whose normals are in the z-direction and should have an empty type)
+- The remaining patches represent each grain boundaries. 
+
+Load the case into ParaView, you can view each patch checking its box in 
+`Mesh Regions` in the Properties panel of the case object.
+
+![OpenFOAM patches for porous media mesh](images/porous-patches.png)
+
+Next, we need to separate inlet and outlet faces from the `auto0` patch where:
+- Outlet faces:
+  - are located at the far right of the domain (in respect to X-direction)
+  - have a normal vector of (1 0 0) (going out of the domain)
+- Inlet faces:
+  - are located at the far left of the domain (in respect to X-direction)
+  - have a normal vector of (-1 0 0) (going out of the domain)
+- We would also like to merge all `auto1..33` patches into a single `grains`
+  patch.
+
+All of these operations can be performed with the help of another OpenFOAM
+utility called `createPatch`, but we'll need to generate some faceSets first.
+
+> faceSets are exactly what the name suggests: Groups of faces with common
+> properties.
+
+
 
 ## Advanced skills
