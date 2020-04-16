@@ -305,7 +305,7 @@ unconnected regions (isolated pores).
 
 ## Intermediate skills
 
-### Advanced usage of `cfMesh`
+### Boundary Patches
 
 Wait! what about boundary patches??
 
@@ -349,5 +349,134 @@ utility called `createPatch`, but we'll need to generate some faceSets first.
 > properties.
 
 
+2. The `setSet` utility provides an interactive shell and also accepts a batch
+   script to create all sorts of sets (You can execute these commands one by 
+   one or assemble them into a script):
+
+```bash
+# File: extractOutletFaces
+# Create a faceSet out of auto0 patch using patchToFace source
+# (Converts the patch to a faceSet)
+faceSet outletSet new patchToFace auto0
+# Delete all faces where x coordinate is less than 141
+# (Keeping the far right ones - Based on te bounding box information)
+faceSet outletSet delete boxToFace (0 0 -2.5) (141 141.139 2.5)
+# Create a set for faces whose normals are not (1 0 0) (tolerance = 1e-3)
+faceSet f0 new normalToFace (1 0 0) 1e-3
+faceSet f0 invert f0
+# Remove these faces from the outlet set
+faceSet outletSet delete faceToFace f0
+```
+To execute the script, you can run:
+```bash
+(rem) > setSet -batch extractOutletFaces
+```
+
+> It's good to check that the faceSet is not **empty** at this point!
+
+Perform similar operations to get the corresponding `inletSet`.
+
+3. You can also create `frontAndBackSet` by combining the last two patches
+   , for example (This is a `setSet` command, not a shell one):
+
+```bash
+faceSet frontAndBackSet new patchToFace "(auto34|auto35)"
+```
+4. The remaining faces should be collected into a `grainsSet` (These are
+   `setSet` commands)
+
+```bash
+# Collect all boundary faces into grainsSet
+faceSet grainsSet new patchToFace "(auto.*)"
+# Remove faces from other faceSets
+faceSet grainsSet delete faceToFace inletSet
+faceSet grainsSet delete faceToFace outletSet
+faceSet grainsSet delete faceToFace frontAndBackSet
+```
+
+5. Now that all needed face sets are ready, we'll use OpenFOAM's `createPatch`
+   utility to convert face sets to boundary patches. Of course, the utility is
+   driven by a dictionary file located in the `system` directory
+
+```bash
+(rem) > cp $FOAM_APP/utilities/mesh/manipulation/createPatch/createPatchDict system
+```
+We only need to overwrite the `patchInfo` keyword with (You should attempt to
+figure it out by yourself first):
+
+```bash
+patchInfo
+(
+	{
+		name inlet;
+		dictionary 
+		{ 
+			type patch; 
+			neighbourPatch auto0; 
+		}
+		constructFrom set;
+		set inletSet;
+	}
+	{
+		name outlet;
+		.... Complete it yourself
+	}
+	{
+		name frontAndBack;
+		.... Complete it yourself
+	}
+	{
+		name grains;
+		.... Complete it yourself
+	}
+);
+```
+
+When choosing boundary patch types, refer to OpenFOAM user guide for help;
+In this case, the following patch types are sufficient:
+
+| Patch Type | Description                                             |
+|------------|---------------------------------------------------------|
+| patch      | A generic patch type, suitable for inlet/outlet patches |
+| wall       | A patch where fluid velocity is expected to be null     |
+| empty      | Ignores the flow in the normal direction to the patch for (font and back patches) |
+
+Finally, we can run the tool:
+```bash
+(rem) > createPatch -overwrite
+```
+
+- `auto.*` patches are automatically deleted
+- Run `checkMesh -constant` and see if boundary-mesh problems arise.
+- Check `constant/polyMesh/boundary` file
+
+The result should look like this:
+
+![Final OpenFOAM mesh boundary for porous media](images/porous-patches-final.png)
+
+> One last note: All of these "face sets" are stored in plain-text files under
+> `constant/polyMesh/sets` like everything else.
+
+> It's also recommended to backup your generated mesh at this stage:
+> ```bash
+> (rem:run/porousMesh) > tar cvf mesh.tar .
+> ```
 
 ## Advanced skills
+
+### cfMesh workflow control
+
+Add the following lines to `system/meshDict` then run `foamCleanTutorials && cartesian2DMesh`
+
+```cpp
+workflowControls {
+	stopAfter templateGeneration;
+	restartFromLatestStep 0;
+}
+```
+1. How many regions the mesh has at this point? (Hint: use `checkMesh -constant` as usual).
+2. Replace `templateGeneration` with `surfaceProjection` and run the command again.
+   Does the generated mesh pass all checks?
+3. `cfMesh` has 8 workflow controls; try each one separately to get a feel for
+   what's happening thoughout the meshing process (Hint: Refer to cfMesh user
+   guide).
