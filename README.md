@@ -1,8 +1,27 @@
-# Assignment for "Meshing tools"
+# Assignment for "3-03 Meshing Utilities" unit
 
 ## Goals
 
-- Master `cfMesh` workflow
+- Master `cfMesh` meshing workflow
+- Get familiarized with some OpenFOAM mesh manipulation tools
+- Become efficient in preparing meshes for pore-scale simulations (for Reservoir Engineering practitioners)
+
+## Before we begin
+
+- You'll have to install the latest stable version of `cfMesh` inside the container first (I assume you're using the Lab environment):
+
+```bash
+# Fix some permissions (I have no idea why these are messed up!!)
+# We'll install cfmesh from into $WM_PROJECT_USER_DIR
+(of@con:~) sudo chmod -R 777 $WM_PROJECT_USER_DIR; cd $WM_PROJECT_USER_DIR
+# Clone a fork of cfMesh
+(of@con:PROJ) git clone https://github.com/blueCFD/cfMesh.git cfmesh
+# Clone this assignment's repo (you can also use your own fork of the repo)
+(of@con:PROJ) git clone https://github.com/ResEng-OpenFOAM/assignment-05-meshing-tools assignment
+# Apply a patch to development branch so we can install cfmesh with OF7
+(of@con:cfmesh) cd cfmesh; git checkout development-OF5x && git apply ../assignment/cfmesh.patch
+# The patch just adds some includes to  some files, no actual code modifications here!
+```
 
 ## Basic-level skills
 
@@ -15,67 +34,28 @@ we need to go through a couple of steps:
 - Set minimal cell size in `system/meshDict`
 
 In this section, we'll attempt to mesh a pore-scale representation of a porous
-sample; similar to what we featured in the lectures.
+sample; similar to what we featured in the unit.
 
-Of course, you'll go through **all** the steps; starting from preparing the
+Of course, we'll go through **all** of these steps; starting from preparing the
 geometry file up to defining boundary patches on the OpenFOAM mesh. So, let's
 get started.
 
 #### Preparing a sample geometry file
 
-Typically, you would usually get the geometry from some CAD software; but we'll
+Typically, one would (usually) get the geometry from some CAD software; but we'll
 try to generate one in this section.
 
-1. The first step is to install [PoreSpy Library](https://github.com/PMEAL/porespy) 
-   in the container; Clone this
-   repository and run the `scripts/installPorespy.sh` file (This may take some
-   time):
-
-```bash
-(rem) > git clone https://github.com/FoamScience/assignment-meshing-tools
-(rem) > cd assignment-meshing-tools
-(rem) > chmod +x scripts/installPorespy.sh
-(rem) > ./scripts/installPorespy.sh
-```
+1. Head over to
+   [MyBinder for PoresPy](https://mybinder.org/v2/gh/ResEng-OpenFOAM/assignment-05-meshing-tools/master?filepath=scripts%2FporousMedia.ipynb) 
+   and run the code shown there to produce a 2D representation of a porous medium and upload it to `file.io`.
 
 > PoreSpy is a collection of image analysis tool used to extract information 
 > from 3D images of porous materials; we are interested only in the generation
 > of a sample porous material at this point.
 
-2. Then, generating a sample porous material is as simple as running the
-   following code in a python interpreter:
-
-```python
-(rem) > run; ipython
->>> import porespy as ps
->>> import matplotlib.pyplot as plt
-# An artificial 400x400 (40%-)porous medium
->>> im = ps.generators.blobs(shape=[400, 400], porosity=0.4, blobiness=1.5)
->>> plt.imsave('porous-media.png', im)
->>> exit
-```
-
-- The first line switches to the `run` directory, and starts a Python session
-  there.
-- All subsequent lines should be executed in that Python session.
-- The first two commands are just "imports", loading some the required modules.
-- Then, we use `porespy.generators.blobs` to generate our sample porous medium
-  and save the results into an object `im`.
-- The `shape` dimensions are "pixels", and the blobiness affects how well the "pores"
-  are connected to each other.
-- The following command saves the `im` object as a PNG image.
-- The last one terminates the Python session, getting us back to the shell.
-
-You can now download the image to your local machine (if you haven't mounted any
-remote directories locally, which is the recommended way):
+2. You can now download the image to the lab container:
 ```bash
-(rem) > scp -i ~/.ssh/remotesshkey.pem linux1@xxx.xxx.xxx.xxx:/home/linux1/run/porous-media.png /tmp
-```
-Or, if you are not on \*Nix  locally, you can upload it to `transfer.sh` for
-example:
-```bash
-(rem) > apt install curl -y
-(rem) > curl --upload-file ./porous-media.png https://transfer.sh/porous-media.png
+(of@con:run)  curl https://file.io/__IMAGE_KEY__ > porous-image.png
 ```
 
 These operations will result in something similar to:
@@ -89,10 +69,10 @@ represents the flow domain).
    boundaries are:
 ```bash
 # First, install some utilities we need
-(rem) > apt install netpbm potrace -y
+(of@con:run) > apt install netpbm potrace -y
 # Then trace the image with potrace
-(rem) > pngtopnm porous-media.png > porous-media.pnm
-(rem) > potrace -s porous-media.pnm
+(of@con:run) > pngtopnm porous-media.png > porous-media.pnm
+(of@con:run) > potrace -s porous-media.pnm
 ```
 
 These operations will result in something similar to (the black region
@@ -101,10 +81,10 @@ should represent the flow domain):
 ![Trace the image file](images/porous-media.svg)
 
 4. The final step is then to **Extrude** the 2D image into a triangulated 3D geometry.
-   This can be automated using some CAD tools (eg. OpenSCAD), but we'll keep
-   simple and use [svg2stl.com](http://svg2stl.com) online web service.
+   This can be automated using some CAD tools (eg. OpenSCAD), but we'll keep things
+   simple and use [svg2stl.com](http://svg2stl.com) web service.
 
-   All you have to do is to upload your SVG image, choose an extrusion-height
+   All you have to do is upload your SVG image, choose an extrusion-height
    (choose the default value, doesn't really matter) and download the generated STL
    file (call it `porous-media.stl`):
 
@@ -112,12 +92,14 @@ should represent the flow domain):
 
 #### Surface Quality
 
+> At this point, you may need to setup a dummy case, or use a previous one!
+
 Run the `surfaceCheck porous-media.stl` (surfaceCheck is an OpenFOAM utility) and answer the
 following questions (based on its output):
 
 5. What's the bounding box of the surface?
-6. What's the percentage of the triangles which have a quality of more than 0.75?
-7. Are there perfect triangles in your STL file? (Hint: max triangle quality)
+6. What's the percentage of the triangles which have a quality exceeding 0.75?
+7. Are there perfect triangles in your STL file? (Hint: watch max triangle quality)
 8. How many unconnected parts are there?
 
 Note that an example case generated a very low-quality surface for me:
@@ -157,9 +139,9 @@ A first look on these metrics suggests that the surface file is of
    you can view them if you use `surfaceSubset` (another OpenFOAM utility):
    - Copy the default dictionary file for the utility:
    ```bash
-   (rem) > cp $FOAM_APP/utilities/surface/surfaceSubset/surfaceSubsetDict .
+   (of@con:dum) > foamGet surfaceSubsetDict
    ```
-   - Inside that dictionary, you should set the `faces` keyword to read the bad
+   - Inside that dictionary (`system/surfaceSubsetDict`), you should set the `faces` keyword to read the bad
    faces from the file:
    ```cpp
    faces   #include "badFaces";
@@ -167,12 +149,12 @@ A first look on these metrics suggests that the surface file is of
    - You can also comment out the whole `surfaces` sub-dictionary in there.
    - Then run the command:
    ```bash
-   (rem) > surfaceSubset surfaceSubsetDict porous-media.stl badFaces.stl
+   (of@con:dum) > surfaceSubset surfaceSubsetDict porous-media.stl badFaces.stl
    ```
    - You can view `badFaces.stl` using ParaView.
 
 Depending on the `cfMesh` workflow you intend to use 
-(`cartesian2DMesh`, `cartesianMesh`, `tetMesh`, `pMesh` ); 
+(`cartesian2DMesh`, `cartesianMesh`, `tetMesh`, or `pMesh` ); 
 these faces may not be that important. For example, for `cartesian2DMesh`
 meshes, faces whose normals are in the z-direction are ignored. In fact,
 we have to remove them for the utility to work.
@@ -180,7 +162,7 @@ we have to remove them for the utility to work.
 
 #### `cartesian2DMesh` workflow
 
-The surface file now is ready for most cfMesh workflow, but the `cartesian2DMesh`
+The surface file now is ready for most cfMesh workflows, but the `cartesian2DMesh`
 workflow requires the absence of any faces whose normals are going in the
 z-direction.
 
@@ -202,14 +184,14 @@ facet normal 0 0 -1
      vertex 0.282 51.506 -2.5
      vertex 0.586 51.524 -2.5
    endloop
-endfacet
+ezndfacet
 ```
 So, a simple text-editor command (or just use: `sed`) could look for the normals 
 we want to delete, and delete the whole facet block (which always spans over 7 lines).
 
 For example, using `sed`, you can
 ```bash
-(rem) > sed -e '/facet normal 0 0/,+6d' porous-media.stl > porous-media-2d.stl
+(of@con:dum) sed -e '/facet normal 0 0/,+6d' porous-media.stl > porous-media-2d.stl
 ```
 
 **Method 02:**
@@ -217,7 +199,7 @@ For example, using `sed`, you can
 The previous method makes the somewhat-"dangerous" assumption that the pattern
 `facet normal 0 0.*` exactly matches every triangle normal we want to delete.
 
-A more accurate method would be chainning a series of ParaView filters to get the
+A potentially more accurate method would be chainning a series of ParaView filters to get the
 same effect of the previous `sed` command:
 
 - Start by loading `porous-media.stl`, and calculating normals with the help of
@@ -231,7 +213,7 @@ same effect of the previous `sed` command:
   of normal z-component and naming it "Z"):
   - Attribute Mode: Point Data
   - Result Array Name: Z
-  - From scalas menu, choose `Normals_Z` 
+  - From scalars menu, choose `Normals_Z` 
 
 - Now that we have the scalar field Z ready, apply a `Threshold` filter to the
   `Calculator` one, with the following settings (To select only faces that have
@@ -247,8 +229,7 @@ same effect of the previous `sed` command:
 
 Now run `surfaceCheck` on the new STL file:
 
-10. How the general triangles quality trend compare to the original 3D STL
-	geometry?
+10. How the general triangles quality trend compare to the original 3D STL geometry?
 11. Are there any outstanding-quality triangles?
 12. What you should pay attention to now is the minimal and maximal edge
     length in the surface file because we want to choose a cellSize that
@@ -274,18 +255,10 @@ minCellSize   0.5;
 maxCellSize   10;
 ```
 
-> Of course, you can use our intoductory case as a dummy base for your meshing
-> experiments:
-> ```bash
-> (rem) > git clone https://github.com/FOAM-School/res-eng-openfoam-intro porousMesh
-> (rem) > rm -r porousMesh/0 porousMesh/0.orig
-> (rem) > cp porous-media-2d.stl porousMesh/
-> ```
-
-Whe choosing minimal cell size in such situations, it's probably best to start
+When attempting to choose the minimal cell size in such situations, it's probably best to start
 with a relatively large one (2.0 for example) and decrease it as you check the
-quality of generated meshes (with `checkMesh -constant` if you have deleted 
-time directories) until all mesh tests pass.
+quality of generated meshes (with `checkMesh -constant` if no time directories are present)
+until all mesh tests pass.
 
 These `cellSize` configurations resulted in the following stats:
 - Cells count around 50,500, 88% of which are hexes, the remaining ones are
@@ -303,6 +276,54 @@ unconnected regions (isolated pores).
 
 ![Porous medium Mesh in OpenFOAM](images/porous-mesh.png)
 
+### More Meshing utilties
+
+Let's build a description table for all meshing utilties we have access to:
+
+```bash
+#!/bin/bash
+
+# Find all Cpp files with path containing utilityName/utilityName.C 
+# (This is a single line)
+mesh_utils=$(find $FOAM_APP/utilities/mesh -regextype posix-extended -regex ".*(.*)\/\1.C")
+
+# For each utility, display name and description
+for ut in $mesh_utils
+do
+    echo "$(basename -s ".C" -- $ut):"
+    sed -n '/Description/,/^$/p' $ut | sed '/Description/d'
+done
+```
+
+The first lines of its output should look like (There are some cfMesh
+utilities in there; these are not official OpenFOAM tools):
+```bash
+tetDecomposition:
+    Decompose a given polyhedral mesh using tetDecomposition.
+
+checkMesh:
+    Checks validity of a mesh
+
+zipUpMesh:
+    Reads in a mesh with hanging vertices and zips up the cells to
+	guarantee that all polyhedral cells of valid shape are closed.
+
+cellSet:
+    Selects a cell set through a dictionary.
+
+setsToZones:
+    Add pointZones/faceZones/cellZones to the mesh from
+	similar named pointSets/faceSets/cellSets.
+
+....
+```
+
+To figure out the general purpose of each utility:
+
+```bash
+(of@con:dum) ls $FOAM_APP/utilties/mesh/*
+```
+
 ## Intermediate skills
 
 ### Boundary Patches
@@ -312,13 +333,13 @@ Wait! what about boundary patches??
 Currently, all boundary faces are assembled into a single patch, which is
 not so useful. If the STL file had some solid names in it they would have
 been retained as boundary patches; but that's "rare" in such situations.
-Sure enough, OpenFOAM has some nice utilities that can help.
+Sure enough, OpenFOAM has some nice utilities which can help.
 
 1. The first step is to run `autoPatch`. This utility tries to figure out
    the distinct patches following a provided feature angle:
 
 ```bash
-(rem) > autoPatch 75 -overwrite
+(of@con:dum) autoPatch 75 -overwrite
 ```
 The utility will then generate many patches (around 36) where:
 - The first patch (`auto0`) is the outer boundary of the domain in the x-y
@@ -369,15 +390,15 @@ faceSet outletSet delete faceToFace f0
 ```
 To execute the script, you can run:
 ```bash
-(rem) > setSet -batch extractOutletFaces
+(of@con:dum) setSet -batch extractOutletFaces
 ```
 
-> It's good to check that the faceSet is not **empty** at this point!
+> It's good to check that the "outletSet" faceSet is not **empty** at this point!
 
 Perform similar operations to get the corresponding `inletSet`.
 
-3. You can also create `frontAndBackSet` by combining the last two patches
-   , for example (This is a `setSet` command, not a shell one):
+3. You can also create `frontAndBackSet` by combining the last two patches,
+   for example (This is a `setSet` command, not a shell one):
 
 ```bash
 faceSet frontAndBackSet new patchToFace "(auto34|auto35)"
@@ -399,7 +420,7 @@ faceSet grainsSet delete faceToFace frontAndBackSet
    driven by a dictionary file located in the `system` directory
 
 ```bash
-(rem) > cp $FOAM_APP/utilities/mesh/manipulation/createPatch/createPatchDict system
+(rem) > foamGet createPatchDict
 ```
 We only need to overwrite the `patchInfo` keyword with (You should attempt to
 figure it out by yourself first):
@@ -439,11 +460,11 @@ In this case, the following patch types are sufficient:
 |------------|---------------------------------------------------------|
 | patch      | A generic patch type, suitable for inlet/outlet patches |
 | wall       | A patch where fluid velocity is expected to be null     |
-| empty      | Ignores the flow in the normal direction to the patch for (font and back patches) |
+| empty      | Ignores the flow in the normal direction to the patch (font and back patches) |
 
 Finally, we can run the tool:
 ```bash
-(rem) > createPatch -overwrite
+(of@con:dum) createPatch -overwrite
 ```
 
 - `auto.*` patches are automatically deleted
@@ -459,7 +480,7 @@ The result should look like this:
 
 > It's also recommended to backup your generated mesh at this stage:
 > ```bash
-> (rem:run/porousMesh) > tar cvf mesh.tar .
+> (of@con:dum) tar cvf mesh.tar .
 > ```
 
 ## Advanced skills
@@ -474,9 +495,95 @@ workflowControls {
 	restartFromLatestStep 0;
 }
 ```
+
 1. How many regions the mesh has at this point? (Hint: use `checkMesh -constant` as usual).
 2. Replace `templateGeneration` with `surfaceProjection` and run the command again.
    Does the generated mesh pass all checks?
 3. `cfMesh` has 8 workflow controls; try each one separately to get a feel for
    what's happening thoughout the meshing process (Hint: Refer to cfMesh user
    guide).
+
+> `cfMesh` doesn't really show available options when an invalid one is passed.
+> Unlike official OpenFOAM tools and solvers, it either continues working with
+> a default value or throws an error and exists. Hence, making the user guide the first
+> resource you should attempt to use.
+
+### cfMesh Refinement settings
+
+One of the first things `cfMesh` workflows do is to figure out the general
+refinement level of the requested mesh:
+```bash
+Requested cell size corresponds to octree level 5
+```
+
+And there is an auto-refinement step which takes care of applying the `minCellSize`
+setting:
+```bash
+Performing automatic refinement
+Requested min cell size corresponds to octree level 10
+```
+
+This section discusses the different refinement concepts implemented in `cfMesh`.
+
+#### i) Boundary cell size
+
+You can explicitely control the boundary cell size (independent from `minCellSize`)
+with:
+
+```cpp
+// Assuming minCellSize = 0.5 for example
+// Set size near boundary patches
+boundaryCellSize   0.7;
+
+// Apply the boundary size for this distance away from the patch:
+boundaryCellSizeRefinementThickness  5;
+```
+
+4. Add similar values to your `meshDict` and rerun the meshing process. Compare
+   mesh quality and cells count with the previous basic mesh.
+
+> For the sample run I performed; the `boundaryCellSize` helped reduce the
+> max non-orthogonality to 32 degrees and increased cells count to around 62000.
+
+Of course, altering the mesh will certainly alter boundary information, that's
+why fixing boundary patches is the **last** operation you should attempt.
+
+#### ii) Local refinement
+
+Refining the whole `boundary` perimeter may not be desired; instead, more frequently,
+we find ourselves in need of refining around some specific boundary patches (or geometry
+subsets).
+
+The STL we used had no subsets, so we won't be able to try it but we'll show the concept:
+
+```cpp
+localRefinement
+{
+	grains // OpenFOAM patch name
+	{
+		// 1 Extra refinement level to minCellSize (level 5 in our example run)
+		additionalRefinementLevels 1;
+		refinementThickness 5;
+	}
+
+	// Or, if the geometry file has some subset "grains" defined
+        grains
+        { 
+		// cellSize around subset faces
+  		cellSize   0.7;
+	}
+}
+```
+
+#### iii) Volume-based refinements
+
+The previous two refinement methods where surface-based. The object-based refinement
+takes care of refining volume regions. The region to be refined is selected using an
+"object" (box, cone, hollowCone, sphere, line, ... etc)
+
+5. Refer to cfMesh User Guide to refine a box of your choice with 1 additional refinement
+   level (Hint: Look for `objectRefinement` dictionary).
+
+> If regular geometries are not enough for your purposes, you can either use
+> `surfaceMeshRefinement` and/or `edgeMeshRefinement` to refine inside regions
+> defined by arbitrary surface (or edgeMesh) files.
